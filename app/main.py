@@ -1,41 +1,26 @@
+# app/main.py
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import PlainTextResponse, JSONResponse
 import os
 
 app = FastAPI()
 
-# === CONFIG ===
-VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN") or os.getenv("WHATSAPP_VERIFY_TOKEN")
+VERIFY_TOKEN = (os.getenv("WA_VERIFY_TOKEN") or os.getenv("WHATSAPP_VERIFY_TOKEN") or "").strip()
 
-# === 1. Servir carpeta estática ===
-# Si tu carpeta "static" está en la raíz del proyecto:
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# === 2. Página principal ===
-@app.get("/")
-async def root():
-    return FileResponse("static/index.html")
-
-# === 3. Healthcheck para Render ===
-@app.get("/healthz")
-async def healthz():
-    return {"ok": True}
-
-# === 4. Webhook de WhatsApp ===
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     mode = request.query_params.get("hub.mode")
-    token = request.query_params.get("hub.verify_token")
+    token = (request.query_params.get("hub.verify_token") or "").strip()
     challenge = request.query_params.get("hub.challenge")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return PlainTextResponse(challenge)
-    else:
-        return PlainTextResponse("forbidden", status_code=403)
+    if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
+        # devolver el challenge en TEXTO PLANO
+        return PlainTextResponse(challenge, status_code=200)
+    return JSONResponse({"error": "Token inválido"}, status_code=403)
 
-@app.post("/webhook")
-async def receive_message(request: Request):
-    data = await request.json()
-    print("📩 webhook body:", data)
-    return {"status": "ok"}
+# (puedes borrar este endpoint tras probar)
+@app.get("/debug-token")
+async def debug_token():
+    # Muestra solo los últimos 2 dígitos; NO expone el token completo
+    masked = VERIFY_TOKEN[:-2].replace(VERIFY_TOKEN[:-2], "*"*max(len(VERIFY_TOKEN)-2, 0)) + VERIFY_TOKEN[-2:]
+    return {"env_token_masked": masked, "len": len(VERIFY_TOKEN)}
