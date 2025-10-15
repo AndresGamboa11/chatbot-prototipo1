@@ -1,5 +1,5 @@
 # app/main.py
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from .settings import get_settings
 from .whatsapp import send_whatsapp_text
@@ -13,9 +13,14 @@ async def healthz():
     return {"ok": True}
 
 @app.get("/webhook")
-async def verify(mode: str = "", challenge: str = "", token: str = ""):
-    if mode == "subscribe" and token == s.wa_verify_token:
-        return PlainTextResponse(challenge)
+async def verify(
+    mode: str | None = Query(None, alias="hub.mode"),
+    challenge: str | None = Query(None, alias="hub.challenge"),
+    verify_token: str | None = Query(None, alias="hub.verify_token"),
+):
+    if mode == "subscribe" and verify_token == s.wa_verify_token:
+        # Meta espera el challenge como texto plano
+        return PlainTextResponse(challenge or "")
     return PlainTextResponse("forbidden", status_code=403)
 
 @app.post("/webhook")
@@ -34,7 +39,7 @@ async def webhook(req: Request):
                 elif msg_type == "interactive":
                     text = (m.get("interactive") or {}).get("button_reply", {}).get("title", "").strip()
                 else:
-                    text = ""  # no soportado aún
+                    text = ""
 
                 if from_id and text:
                     reply = await answer_with_rag(text)
