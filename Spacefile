@@ -1,0 +1,18 @@
+# Spacefile
+v: 0
+micros:
+  - name: ccp-api
+    src: .
+    engine: "python3.11"
+    primary: true
+    run: "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+    env:
+      - WHATSAPP_TOKEN
+      - WHATSAPP_PHONE_NUMBER_ID
+      - WHATSAPP_VERIFY_TOKEN
+      - GROQ_API_KEY
+      - HF_API_TOKEN
+      - CHROMA_API_KEY
+      - CHROMA_TENANT
+      - CHROMA_DATABASE
+      - CHROMA_COLLECTION

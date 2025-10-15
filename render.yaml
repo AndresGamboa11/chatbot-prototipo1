@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: ccp-whatsapp-rag
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT --timeout 120
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      # Puedes rellenarlas aquí o desde el panel
+      - key: WA_ACCESS_TOKEN
+        sync: false
+      - key: WA_PHONE_NUMBER_ID
+        sync: false
+      - key: WA_VERIFY_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: gemma2-9b-it
+      - key: HF_API_TOKEN
+        sync: false
+      - key: HF_EMBED_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      # Chroma Cloud (si usas HTTP)
+      - key: CHROMA_SERVER_HOST
+        sync: false
+      - key: CHROMA_SERVER_AUTH
+        sync: false
+      - key: CHROMA_TENANT
+        sync: false
+      - key: CHROMA_DATABASE
+        sync: false
+      - key: CHROMA_COLLECTION
+        value: ccp_docs
