@@ -1,77 +1,42 @@
+# app/main.py
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
-import os, httpx, asyncio, uvicorn
+from fastapi.responses import PlainTextResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+import os
 
 app = FastAPI()
 
-# --- Ruta principal
-@app.get("/")
-def home():
-    return {"message": "Chatbot CCP online ✅"}
+# 1) Servir archivos estáticos (carpeta en la raíz del proyecto)
+#    Si tu carpeta está dentro de app (app/static), cambia directory="app/static"
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Verificación de salud
+# 2) Página principal: devuelve tu index.html
+@app.get("/")
+async def root():
+    return FileResponse("static/index.html")
+
+# 3) Healthcheck para Render
 @app.get("/healthz")
-async def health():
+async def healthz():
     return {"ok": True}
 
-# --- Verificación del webhook (Meta)
+# 4) Webhook de WhatsApp (NO HTML aquí)
+VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN") or os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+# Verificación (GET)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
-    VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN")
+    if mode == "subscribe" and token == (VERIFY_TOKEN or "") and challenge:
+        return PlainTextResponse(challenge)
+    return PlainTextResponse("forbidden", status_code=403)
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return PlainTextResponse(content=challenge, status_code=200)
-    return JSONResponse(content={"error": "Invalid token"}, status_code=403)
-
-# --- Recepción de mensajes
+# Recepción de mensajes (POST)
 @app.post("/webhook")
 async def receive_message(request: Request):
-    data = await request.json()
-    print("📩 Mensaje recibido:", data)
-
-    # Validar estructura
-    try:
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
-        messages = value.get("messages")
-
-        if messages:
-            message = messages[0]
-            sender = message["from"]  # número del remitente
-            text = message["text"]["body"]
-
-            print(f"👤 Mensaje de {sender}: {text}")
-            await send_whatsapp_message(sender, "👋 ¡Hola! Soy el Chatbot CCP. ¿En qué puedo ayudarte?")
-    except Exception as e:
-        print("⚠️ Error al procesar mensaje:", e)
-
-    return {"status": "received"}
-
-# --- Envío de mensaje
-async def send_whatsapp_message(to: str, message: str):
-    WHATSAPP_TOKEN = os.getenv("WA_ACCESS_TOKEN")
-    PHONE_NUMBER_ID = os.getenv("WA_PHONE_NUMBER_ID")
-
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": message}
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=data)
-        print("📤 Respuesta de Meta:", response.status_code, response.text)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    body = await request.json()
+    print("📩 webhook body:", body)
+    # aquí llamas a tu lógica de RAG y send_whatsapp_text(...)
+    return {"status": "ok"}
