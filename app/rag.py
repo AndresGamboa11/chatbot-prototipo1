@@ -1,63 +1,94 @@
-# app/rag.py
-from typing import List, Tuple
-import httpx
-from .settings import get_settings
-from .chroma_client import get_collection
-from .providers import groq_chat, _mean_pool, cosine_sim
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import os, json, httpx
+from app.rag import answer_with_rag  # si tu función existe
 
-async def hf_embed(texts: List[str]) -> List[List[float]]:
-    s = get_settings()
-    url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{s.hf_embed_model}"
-    headers = {"Authorization": f"Bearer {s.hf_api_token}"}
-    payload = {"inputs": texts, "options": {"wait_for_model": True}}
+# --- estático e index ---
+app.mount("/static", StaticFiles(directory="static"), name="static")
+@app.get("/")
+async def root():
+    return FileResponse("static/index.html")
+app = FastAPI()
+
+WA_TOKEN = os.getenv("WA_ACCESS_TOKEN") or os.getenv("WHATSAPP_TOKEN")
+WA_PHONE_ID = os.getenv("WA_PHONE_NUMBER_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WA_API_VER = os.getenv("WA_API_VERSION", "v21.0")
+
+# --------------------------------------------------------------
+# FUNCIONES DE APOYO
+# --------------------------------------------------------------
+
+async def send_whatsapp_text(to_number: str, body: str) -> dict:
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"preview_url": False, "body": body[:4096]},
+    }
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
-    if isinstance(texts, str):
-        return [_mean_pool(data)]
-    # batched
-    return [_mean_pool(x) for x in data]
+        print(f"📤 WA status={r.status_code} body={r.text[:200]}")
+        return {"status": r.status_code, "text": r.text}
 
-async def search_chroma(query: str, top_k: int = 6) -> List[Tuple[str, str, float]]:
-    """
-    Devuelve [(texto, doc_id, score)]
-    """
-    col = get_collection()
-    qv = (await hf_embed([query]))[0]
-    res = col.query(query_embeddings=[qv], n_results=top_k, include=["metadatas", "documents", "distances", "embeddings"])
-    docs = (res.get("documents") or [[]])[0]
-    metadatas = (res.get("metadatas") or [[]])[0]
-    embs = (res.get("embeddings") or [[]])[0]
-    # calc cosine sobre embeddings (por si distances no es cos)
-    scores = [cosine_sim(qv, e) for e in embs] if embs else [1.0 - d for d in (res.get("distances") or [[]])[0]]
-    out = []
-    for i, txt in enumerate(docs):
-        md = metadatas[i] if i < len(metadatas) else {}
-        doc_id = md.get("id") or md.get("source") or f"doc_{i}"
-        out.append((txt, str(doc_id), float(scores[i]) if i < len(scores) else 0.0))
-    return out
 
-def build_prompt(question: str, ctx: List[Tuple[str, str, float]]) -> list:
-    citations = "\n\n".join([f"[{i+1}] ({doc_id}) {frag[:500]}" for i, (frag, doc_id, _) in enumerate(ctx)])
-    system = (
-        "Eres un asistente de la Cámara de Comercio de Pamplona (Colombia). "
-        "Responde de forma breve, exacta y con tono cordial. "
-        "Si la respuesta no está en el contexto, indica que no tienes datos y sugiere contactar a un asesor.\n"
-        "Cita las fuentes como [1], [2], ... solo si son relevantes."
-    )
-    user = f"Pregunta: {question}\n\nContexto:\n{citations}\n\nInstrucciones: responde en español en 5-8 líneas como máximo."
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+async def wa_mark_read(message_id: str):
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
+    async with httpx.AsyncClient(timeout=30) as c:
+        await c.post(url, headers=headers, json=payload)
 
-async def answer_with_rag(question: str) -> str:
-    ctx = await search_chroma(question, top_k=6)
-    # opcional: rerank simple por similitud (ya usamos cosine arriba)
-    ctx_top = sorted(ctx, key=lambda x: x[2], reverse=True)[:4]
-    messages = build_prompt(question, ctx_top)
+async def wa_typing(to_number: str, state: str = "composing"):
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to_number, "type": "typing", "typing": {"state": state}}
+    async with httpx.AsyncClient(timeout=30) as c:
+        await c.post(url, headers=headers, json=payload)
+
+# --------------------------------------------------------------
+# ENDPOINT PRINCIPAL
+# --------------------------------------------------------------
+
+@app.post("/webhook")
+async def webhook(req: Request):
+    raw = await req.body()
+    if not raw:
+        return {"status": "ok"}
+
     try:
-        answer = await groq_chat(messages, temperature=0.2, max_tokens=500)
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        print("⚠️ POST no-JSON recibido")
+        return {"status": "ok"}
+
+    print("📩 payload:", body)
+
+    try:
+        for entry in body.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                for msg in value.get("messages", []):
+                    user = msg.get("from")
+                    msg_id = msg.get("id")
+                    text = (msg.get("text") or {}).get("body", "").strip()
+
+                    if user and text:
+                        await wa_mark_read(msg_id)
+                        await wa_typing(user, "composing")
+
+                        try:
+                            # 🔹 Lógica de respuesta (usa RAG o simple eco)
+                            reply = await answer_with_rag(text)
+                        except Exception as e:
+                            print("❌ Error en RAG:", e)
+                            reply = f"Recibí tu mensaje: {text}"
+
+                        await wa_typing(user, "paused")
+                        await send_whatsapp_text(user, reply)
+
     except Exception as e:
-        # fallback minimalista
-        joined = " ".join([c[0] for c in ctx_top])[:1200]
-        answer = f"No pude contactar el modelo en este momento.\n\nContexto:\n{joined}"
-    return answer
+        print("❌ Error en webhook:", e)
+
+    return JSONResponse({"status": "ok"})
