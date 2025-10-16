@@ -1,34 +1,23 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-import os
-import json
-import httpx
+from fastapi.responses import JSONResponse
+import os, json, httpx
+from app.rag import answer_with_rag  # si tu función existe
 
 app = FastAPI()
-
-# Montar carpeta estática (sirve index.html, imágenes, etc.)
+# --- estático e index ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Página principal → muestra el index.html
-@app.get("/", include_in_schema=False)
+@app.get("/")
 async def root():
     return FileResponse("static/index.html")
-
-
-# Endpoint de salud (Render lo usa)
-@app.get("/healthz", include_in_schema=False)
-async def healthz():
-    return JSONResponse({"ok": True})
-
-
-# Configuración WhatsApp (usa variables de entorno)
+    
 WA_TOKEN = os.getenv("WA_ACCESS_TOKEN") or os.getenv("WHATSAPP_TOKEN")
 WA_PHONE_ID = os.getenv("WA_PHONE_NUMBER_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 WA_API_VER = os.getenv("WA_API_VERSION", "v21.0")
 
+# --------------------------------------------------------------
+# FUNCIONES DE APOYO
+# --------------------------------------------------------------
 
-# Envío de mensaje a WhatsApp
 async def send_whatsapp_text(to_number: str, body: str) -> dict:
     url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
@@ -44,33 +33,62 @@ async def send_whatsapp_text(to_number: str, body: str) -> dict:
         return {"status": r.status_code, "text": r.text}
 
 
-# Webhook (verificación + recepción)
-@app.get("/webhook", include_in_schema=False)
-async def verify(request: Request):
-    params = request.query_params
-    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == os.getenv("WA_VERIFY_TOKEN"):
-        return JSONResponse(content=params.get("hub.challenge"))
-    return JSONResponse(content="Forbidden", status_code=403)
+async def wa_mark_read(message_id: str):
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
+    async with httpx.AsyncClient(timeout=30) as c:
+        await c.post(url, headers=headers, json=payload)
 
+async def wa_typing(to_number: str, state: str = "composing"):
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to_number, "type": "typing", "typing": {"state": state}}
+    async with httpx.AsyncClient(timeout=30) as c:
+        await c.post(url, headers=headers, json=payload)
 
-@app.post("/webhook", include_in_schema=False)
-async def webhook(request: Request):
+# --------------------------------------------------------------
+# ENDPOINT PRINCIPAL
+# --------------------------------------------------------------
+
+@app.post("/webhook")
+async def webhook(req: Request):
+    raw = await req.body()
+    if not raw:
+        return {"status": "ok"}
+
     try:
-        body = await request.json()
+        body = json.loads(raw)
     except json.JSONDecodeError:
-        print("⚠️ cuerpo vacío o no JSON")
-        return JSONResponse({"status": "ok"})
+        print("⚠️ POST no-JSON recibido")
+        return {"status": "ok"}
 
     print("📩 payload:", body)
+
     try:
         for entry in body.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
-                for m in value.get("messages", []):
-                    user = m.get("from")
-                    text = (m.get("text") or {}).get("body", "")
+                for msg in value.get("messages", []):
+                    user = msg.get("from")
+                    msg_id = msg.get("id")
+                    text = (msg.get("text") or {}).get("body", "").strip()
+
                     if user and text:
-                        await send_whatsapp_text(user, f"Recibí tu mensaje: {text}")
+                        await wa_mark_read(msg_id)
+                        await wa_typing(user, "composing")
+
+                        try:
+                            # 🔹 Lógica de respuesta (usa RAG o simple eco)
+                            reply = await answer_with_rag(text)
+                        except Exception as e:
+                            print("❌ Error en RAG:", e)
+                            reply = f"Recibí tu mensaje: {text}"
+
+                        await wa_typing(user, "paused")
+                        await send_whatsapp_text(user, reply)
+
     except Exception as e:
-        print("❌ error webhook:", e)
+        print("❌ Error en webhook:", e)
+
     return JSONResponse({"status": "ok"})
