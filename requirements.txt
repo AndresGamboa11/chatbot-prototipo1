@@ -2,13 +2,15 @@ fastapi==0.115.2
 uvicorn[standard]==0.30.6
 httpx==0.27.2
 python-dotenv==1.0.1
-pydantic==2.9.2
+
+groq==0.11.0
 chromadb==0.5.5
-# ingest
 pypdf==4.3.1
 beautifulsoup4==4.12.3
-groq==0.11.0
 
+# Embeddings (versión más liviana que 3.x)
+sentence-transformers==2.2.2
 
-# opcional (solo si usarás backend local)
-sentence-transformers==3.1.1
+# torch se instala en Dockerfile (wheel CPU). Si prefieres aquí, comenta la línea del Dockerfile
+# y descomenta la siguiente:
+# torch==2.4.1; sys_platform != 'darwin'
