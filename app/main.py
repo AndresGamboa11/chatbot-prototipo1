@@ -223,42 +223,42 @@ async def process_and_reply(to_waid: str, user_text: str):
         except Exception as e2:
             print("ERROR_SENDING_FAILSAFE:", repr(e2))
 
-# ---------- ENVÍO MANUAL PARA PRUEBAS ----------
-@app.get("/send-test")
-async def send_test(to: str):
-    """Envía la plantilla hello_world para probar salidas sin depender del webhook."""
-    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,  # ej. 57XXXXXXXXXX
-        "type": "template",
-        "template": {"name": "hello_world", "language": {"code": "en_US"}},
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {WA_TOKEN}"},
-            json=payload,
-        )
-    try:
-        return JSONResponse({"status": r.status_code, "json": r.json()})
-    except Exception:
-        return JSONResponse({"status": r.status_code, "text": r.text})
-
-@app.get("/chroma-check")
-def chroma_check():
-    try:
-        from app.chroma_client import get_collection
-        col = get_collection()
-        # algunas versiones no tienen count(), usamos where vacio y n_results pequeño solo para validar
-        res = col.query(query_texts=["ping"], n_results=1, include=[])
-        return {"ok": True, "collection": col.name}
-    except Exception as e:
-        return {"ok": False, "error": repr(e)}
-        @app.get("/ask")
-async def ask(q: str):
-    from app.rag import answer_with_rag
-    ans = await answer_with_rag(q)
-    return {"query": q, "answer": ans}
-
-
+    # ---------- ENVÍO MANUAL PARA PRUEBAS ----------
+    @app.get("/send-test")
+    async def send_test(to: str):
+        """Envía la plantilla hello_world para probar salidas sin depender del webhook."""
+        url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,  # ej. 57XXXXXXXXXX
+            "type": "template",
+            "template": {"name": "hello_world", "language": {"code": "en_US"}},
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {WA_TOKEN}"},
+                json=payload,
+            )
+        try:
+            return JSONResponse({"status": r.status_code, "json": r.json()})
+        except Exception:
+            return JSONResponse({"status": r.status_code, "text": r.text})
+    
+    @app.get("/chroma-check")
+    def chroma_check():
+        try:
+            from app.chroma_client import get_collection
+            col = get_collection()
+            # algunas versiones no tienen count(), usamos where vacio y n_results pequeño solo para validar
+            res = col.query(query_texts=["ping"], n_results=1, include=[])
+            return {"ok": True, "collection": col.name}
+        except Exception as e:
+            return {"ok": False, "error": repr(e)}
+            @app.get("/ask")
+    async def ask(q: str):
+        from app.rag import answer_with_rag
+        ans = await answer_with_rag(q)
+        return {"query": q, "answer": ans}
+    
+    
