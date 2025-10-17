@@ -11,7 +11,12 @@ Uso:
   python -m ingest.ingest_ccp --dir knowledge/ccp --backend hf --reset
   python -m ingest.ingest_ccp --dir knowledge/ccp --backend local --chunk-size 420 --chunk-overlap 80
 """
-
+def add_docs_to_chroma(docs, metadatas, ids):
+    # docs: lista de textos/chunks
+    vecs = hf_embed(docs)  # [[384], ...]
+    col = get_collection()
+    col.add(documents=docs, metadatas=metadatas, ids=ids, embeddings=vecs)
+  
 from __future__ import annotations
 import os, re, glob, argparse, html
 from pathlib import Path
