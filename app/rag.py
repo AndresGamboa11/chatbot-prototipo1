@@ -1,9 +1,9 @@
 # app/rag.py
 import os, asyncio, requests
-from typing import List, Union, Optional
+from typing import List, Union
 
-# --- Chroma Cloud (vectores) ---
-from chromadb import HttpClient
+# --- Cliente de Chroma centralizado (usa CloudClient/tenant/db de tu proyecto) ---
+from app.chroma_client import get_collection
 
 # --- LLM (Groq / Gemma) ---
 from groq import Groq
@@ -32,11 +32,7 @@ No uses lenguaje técnico excesivo ni términos que un ciudadano promedio no ent
 Tus respuestas deben ser breves (pero no tan cortas), claras y útiles para quien consulta por WhatsApp.
 """.strip()
 
-# ================== CONFIG RAG ==================
-CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "https://api.trychroma.com")
-CHROMA_SERVER_AUTH = os.getenv("CHROMA_SERVER_AUTH", "")
-CHROMA_TENANT      = os.getenv("CHROMA_TENANT", "")
-CHROMA_DATABASE    = os.getenv("CHROMA_DATABASE", "bot-1")
+# ================== CONFIG ==================
 CHROMA_COLLECTION  = os.getenv("CHROMA_COLLECTION", "ccp_docs")
 
 # Embeddings por API (sin sentence-transformers/torch)
@@ -54,48 +50,59 @@ _llm = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 def hf_embed(texts: Union[str, List[str]]) -> List[List[float]]:
     """
     Obtiene embeddings vía Hugging Face Inference API.
-    Devuelve siempre una lista de vectores 2D: [[dim], ...]
+    Devuelve siempre una lista 2D: [[dim], ...]
+    Maneja las variantes de salida (1 o N textos).
     """
     if not HF_API_TOKEN:
         raise RuntimeError("HF_API_TOKEN no configurado en variables de entorno.")
 
     if isinstance(texts, str):
-        payload = {"inputs": [texts], "truncate": True}
+        payload = {"inputs": [texts], "truncate": True, "options": {"wait_for_model": True}}
     else:
-        payload = {"inputs": texts, "truncate": True}
+        payload = {"inputs": texts, "truncate": True, "options": {"wait_for_model": True}}
 
-    r = requests.post(_HF_URL, headers=_HF_HEADERS, json=payload, timeout=60)
+    r = requests.post(_HF_URL, headers=_HF_HEADERS, json=payload, timeout=120)
     r.raise_for_status()
     data = r.json()
-    # La API puede devolver [dim] para 1 texto; normalizamos a [[dim]]
-    if isinstance(texts, str):
-        return [data]
-    return data
 
-# ====== Cliente Chroma ======
-def _chroma() -> HttpClient:
-    headers = {"Authorization": f"Bearer {CHROMA_SERVER_AUTH}"} if CHROMA_SERVER_AUTH else None
-    client = HttpClient(
-        host=CHROMA_SERVER_HOST,
-        headers=headers,
-        tenant=CHROMA_TENANT or None,
-        database=CHROMA_DATABASE or None,
-    )
-    return client
+    # Normalización de formas:
+    # - 1 texto → [dim]  ó  [ [seq, dim] ]  (según modelo)
+    # - N textos → [ [dim], [dim], ... ]  ó  [ [ [seq,dim] ], ... ]
+    def mean_pool(v):
+        # [dim]
+        if v and isinstance(v[0], (int, float)):
+            return v
+        # [seq, dim]
+        if v and isinstance(v[0], list) and v[0] and isinstance(v[0][0], (int, float)):
+            seq, dim = len(v), len(v[0])
+            return [sum(v[t][d] for t in range(seq)) / max(seq, 1) for d in range(dim)]
+        # [[seq, dim], ...]
+        pooled = []
+        for row in v:
+            if row and isinstance(row[0], list) and isinstance(row[0][0], (int, float)):
+                seq, dim = len(row), len(row[0])
+                pooled.append([sum(row[t][d] for t in range(seq)) / max(seq, 1) for d in range(dim)])
+            else:
+                raise RuntimeError("Formato de embeddings inesperado.")
+        return pooled
+
+    pooled = mean_pool(data)
+    # [[dim]] cuando es un solo texto, o [[dim], ...] cuando son varios
+    if pooled and isinstance(pooled[0], (int, float)):
+        return [pooled]
+    return pooled
 
 # ====== RAG: Retrieve ======
 async def _search_chunks(query: str, k: int = 5) -> List[str]:
     """
     Busca en Chroma usando embeddings precomputados.
-    Requiere que la colección tenga embeddings cargados en la ingesta (col.add(..., embeddings=...)).
+    Requiere que la colección tenga embeddings cargados en la ingesta (add(..., embeddings=...)).
     """
-    client = _chroma()
-    # ¡Importante!: NO pasar embedding_function aquí; usamos query_embeddings.
-    coll = client.get_or_create_collection(name=CHROMA_COLLECTION)
+    col = get_collection()  # ← usa el cliente central (CloudClient con tenant/db correctos)
 
     # Embedding de la consulta (HF Inference)
     qvec = hf_embed(query)[0]  # vector [dim]
-    res = coll.query(
+    res = col.query(
         query_embeddings=[qvec],
         n_results=k,
         include=["documents", "metadatas", "distances"]
@@ -106,7 +113,17 @@ async def _search_chunks(query: str, k: int = 5) -> List[str]:
 
 # ====== Prompt ======
 def _build_prompt(question: str, context_docs: List[str]) -> str:
-    context = "\n\n".join(context_docs[:5]) or "No hay contexto disponible."
+    # recorta contexto por si los chunks son largos
+    clipped = []
+    total_chars = 0
+    for d in context_docs[:5]:
+        d2 = d[:2000]  # evita prompts gigantes
+        clipped.append(d2)
+        total_chars += len(d2)
+        if total_chars >= 8000:
+            break
+
+    context = "\n\n".join(clipped) or "No hay contexto disponible."
     return f"""# Contexto (RAG)
 {context}
 
