@@ -2,6 +2,25 @@
 import chromadb
 from .settings import get_settings
 
+import os
+import chromadb
+
+CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST")
+CHROMA_SERVER_AUTH = os.getenv("CHROMA_SERVER_AUTH")
+CHROMA_TENANT = os.getenv("CHROMA_TENANT")
+CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "bot-1")
+CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "ccp_docs")
+
+client = chromadb.HttpClient(
+    host=CHROMA_SERVER_HOST,
+    headers={"Authorization": f"Bearer {CHROMA_SERVER_AUTH}"},
+    tenant=CHROMA_TENANT,
+    database=CHROMA_DATABASE,
+)
+
+
+def get_collection():
+    return client.get_or_create_collection(name=CHROMA_COLLECTION)
 
 _DEFAULT_METADATA = {"hnsw:space": "cosine"}
 
