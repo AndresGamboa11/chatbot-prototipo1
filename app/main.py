@@ -2,6 +2,9 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 import os, json, httpx, asyncio
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 from typing import Optional
 
 # Si answer_with_rag falla al importar (p.ej. por embeddings), lo capturamos
@@ -12,6 +15,8 @@ except Exception as _rag_import_err:
     print("WARN: RAG no disponible en import:", repr(_rag_import_err))
 
 app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------- VARIABLES DE ENTORNO ----------
 WA_TOKEN = (
@@ -114,9 +119,9 @@ def _is_non_text_message(msg: dict) -> Optional[str]:
     return None
 
 # ---------- SALUD Y DIAGNÓSTICO ----------
-@app.get("/")
+@app.get("/", response_class=FileResponse)
 def root():
-    return {"ok": True, "service": "CCP WhatsApp RAG", "webhook": "/webhook"}
+    return FileResponse("static/index.html")
 
 @app.get("/healthz")
 def healthz():
