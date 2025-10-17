@@ -7,7 +7,7 @@ chromadb==0.5.5
 # ingest
 pypdf==4.3.1
 beautifulsoup4==4.12.3
-groq==0.11.
+groq==0.11.0
 
 
 # opcional (solo si usarás backend local)
