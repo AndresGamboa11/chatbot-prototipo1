@@ -11,6 +11,4 @@ beautifulsoup4==4.12.3
 # Embeddings (versión más liviana que 3.x)
 sentence-transformers==2.2.2
 
-# torch se instala en Dockerfile (wheel CPU). Si prefieres aquí, comenta la línea del Dockerfile
-# y descomenta la siguiente:
-# torch==2.4.1; sys_platform != 'darwin'
+
