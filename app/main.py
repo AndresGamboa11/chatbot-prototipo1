@@ -244,3 +244,15 @@ async def send_test(to: str):
         return JSONResponse({"status": r.status_code, "json": r.json()})
     except Exception:
         return JSONResponse({"status": r.status_code, "text": r.text})
+
+@app.get("/chroma-check")
+def chroma_check():
+    try:
+        from app.chroma_client import get_collection
+        col = get_collection()
+        # algunas versiones no tienen count(), usamos where vacio y n_results pequeño solo para validar
+        res = col.query(query_texts=["ping"], n_results=1, include=[])
+        return {"ok": True, "collection": col.name}
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
+
