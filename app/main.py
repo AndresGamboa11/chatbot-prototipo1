@@ -255,4 +255,10 @@ def chroma_check():
         return {"ok": True, "collection": col.name}
     except Exception as e:
         return {"ok": False, "error": repr(e)}
+        @app.get("/ask")
+async def ask(q: str):
+    from app.rag import answer_with_rag
+    ans = await answer_with_rag(q)
+    return {"query": q, "answer": ans}
+
 
