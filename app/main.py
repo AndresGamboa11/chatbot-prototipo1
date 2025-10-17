@@ -2,7 +2,14 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 import os, json, httpx, asyncio
-from app.rag import answer_with_rag  # <-- usa tu RAG/IA
+from typing import Optional
+
+# Si answer_with_rag falla al importar (p.ej. por embeddings), lo capturamos
+try:
+    from app.rag import answer_with_rag  # <-- tu RAG/IA (no debe importar sentence-transformers)
+except Exception as _rag_import_err:
+    answer_with_rag = None
+    print("WARN: RAG no disponible en import:", repr(_rag_import_err))
 
 app = FastAPI()
 
@@ -19,19 +26,30 @@ VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN") or os.getenv("VERIFY_TOKEN") or "ver
 # ---------- UTIL ----------
 async def send_whatsapp_text(to_number: str, body: str):
     """Envía un texto simple por WhatsApp."""
+    if not WA_TOKEN or not WA_PHONE_ID:
+        print("SEND SKIPPED: Falta WA_TOKEN o WA_PHONE_ID")
+        return None
+
     url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"preview_url": False, "body": (body or "")[:4096]},
+    }
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(
             url,
             headers={"Authorization": f"Bearer {WA_TOKEN}"},
-            json={
-                "messaging_product": "whatsapp",
-                "to": to_number,
-                "type": "text",
-                "text": {"preview_url": False, "body": body[:4096]},
-            },
+            json=payload,
         )
-    print("SEND RESP:", r.status_code, r.text)
+    # Logs compactos
+    try:
+        j = r.json()
+    except Exception:
+        j = r.text[:500]
+    print(f"SEND RESP {r.status_code}: {j}")
+
     if r.status_code == 401:
         print("HINT: 401 → Token inválido/expirado. Renueva WA_ACCESS_TOKEN en Render.")
     if r.status_code == 400 and "phone number" in (r.text or "").lower():
@@ -52,10 +70,53 @@ def _out_of_scope(user_text: str) -> bool:
     t = (user_text or "").lower()
     return not any(k in t for k in IN_SCOPE)
 
+def _extract_text_from_message(msg: dict) -> Optional[str]:
+    """
+    Soporta:
+    - text.body
+    - button.text
+    - interactive.type == 'button_reply' | 'list_reply' | 'nfm_reply'
+    - interactive.text (algunas variantes)
+    """
+    # text
+    t = (msg.get("text") or {}).get("body")
+    if t:
+        return t.strip()
+
+    # button
+    btn = msg.get("button") or {}
+    if "text" in btn and btn["text"]:
+        return str(btn["text"]).strip()
+
+    # interactive
+    inter = msg.get("interactive") or {}
+    itype = inter.get("type")
+    if itype == "button_reply":
+        br = inter.get("button_reply") or {}
+        return (br.get("title") or br.get("id") or "").strip() or None
+    if itype == "list_reply":
+        lr = inter.get("list_reply") or {}
+        return (lr.get("title") or lr.get("id") or "").strip() or None
+    # algunas integraciones agregan interactive.text
+    if "text" in inter and inter["text"]:
+        return str(inter["text"]).strip()
+
+    return None
+
+def _is_non_text_message(msg: dict) -> Optional[str]:
+    """
+    Detecta si el mensaje recibido es imagen, documento, audio, video, etc.
+    Retorna el tipo si aplica.
+    """
+    for key in ("image", "document", "audio", "video", "sticker", "location", "contacts"):
+        if key in msg:
+            return key
+    return None
+
 # ---------- SALUD Y DIAGNÓSTICO ----------
 @app.get("/")
 def root():
-    return {"ok": True}
+    return {"ok": True, "service": "CCP WhatsApp RAG", "webhook": "/webhook"}
 
 @app.get("/healthz")
 def healthz():
@@ -70,6 +131,7 @@ def env_check():
         "WA_PHONE_NUMBER_ID_set": bool(WA_PHONE_ID),
         "WA_API_VERSION": WA_API_VER,
         "VERIFY_TOKEN_set": bool(VERIFY_TOKEN),
+        "RAG_import_ok": answer_with_rag is not None,
     }
 
 # ---------- VERIFICACIÓN WEBHOOK (GET) ----------
@@ -84,7 +146,7 @@ async def verify(request: Request):
 @app.post("/webhook")
 async def receive(request: Request):
     body = await request.json()
-    print("WEBHOOK EVENT:", json.dumps(body, ensure_ascii=False))
+    print("WEBHOOK EVENT:", json.dumps(body, ensure_ascii=False)[:4000])
 
     try:
         changes = body["entry"][0]["changes"][0]["value"]
@@ -94,7 +156,18 @@ async def receive(request: Request):
 
         msg = msgs[0]
         from_waid = msg["from"]
-        user_text = msg.get("text", {}).get("body", "").strip()
+
+        # ¿Es no-texto? (imagen/doc/audio/etc.)
+        non_text = _is_non_text_message(msg)
+        if non_text:
+            asyncio.create_task(send_whatsapp_text(
+                from_waid,
+                "Por ahora solo puedo procesar mensajes de texto. ¿Podrías escribir tu consulta?"
+            ))
+            return {"status": "ok"}
+
+        # Extracción robusta de texto
+        user_text = (_extract_text_from_message(msg) or "").strip()
 
         # Procesar en segundo plano (no bloquear el 200 del webhook)
         asyncio.create_task(process_and_reply(from_waid, user_text))
@@ -107,6 +180,13 @@ async def receive(request: Request):
 async def process_and_reply(to_waid: str, user_text: str):
     """Procesa la consulta, aplica reglas de alcance y responde con RAG/IA."""
     try:
+        if not user_text:
+            await send_whatsapp_text(
+                to_waid,
+                "¿Podrías detallar tu consulta? Por ejemplo: “requisitos renovación matrícula”."
+            )
+            return
+
         # 1) Filtro rápido de alcance (tus políticas)
         if _out_of_scope(user_text):
             msg = ("Lo siento, solo puedo brindarte información relacionada con la Cámara de Comercio de Pamplona. "
@@ -114,14 +194,18 @@ async def process_and_reply(to_waid: str, user_text: str):
             await send_whatsapp_text(to_waid, msg)
             return
 
-        # 2) Opción: acuse de recibo (descomenta si lo deseas)
+        # 2) Opción: acuse de recibo (si lo quieres, descomenta)
         # await send_whatsapp_text(to_waid, "Recibí tu mensaje, estoy consultando…")
 
         # 3) Llamar RAG/IA
-        answer = await answer_with_rag(user_text)
+        if answer_with_rag is None:
+            final_text = ("El módulo de búsqueda está inicializando. Intenta de nuevo en unos instantes "
+                          "o contacta a un asesor.")
+        else:
+            final_text = await answer_with_rag(user_text)
 
         # 4) Responder al usuario
-        final_text = (answer or
+        final_text = (final_text or
                       "No tengo esa información exacta; te recomiendo verificarla con un asesor de la Cámara.")
         await send_whatsapp_text(to_waid, final_text)
     except Exception as e:
