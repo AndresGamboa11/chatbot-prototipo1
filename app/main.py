@@ -1,119 +1,83 @@
 # app/main.py
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from importlib import import_module
-import inspect
-import os, json, httpx
+from fastapi.responses import PlainTextResponse
+import os, json, httpx, asyncio
+from app.rag import answer_with_rag  # <-- usa tu RAG
 
-# 1) Instancia FastAPI primero
 app = FastAPI()
 
-# 2) Servir estáticos y página principal
-try:
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-except Exception as e:
-    print("⚠️ static mount:", e)
+WA_TOKEN = os.getenv("WA_ACCESS_TOKEN") or ""
+WA_PHONE_ID = os.getenv("WA_PHONE_NUMBER_ID") or ""
+WA_API_VER = os.getenv("WA_API_VERSION", "v21.0")
+VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN", "verify_me")
+
+async def send_whatsapp_text(to_number: str, body: str):
+    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {WA_TOKEN}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to_number,
+                "type": "text",
+                "text": {"preview_url": False, "body": body[:4096]},
+            },
+        )
+    print("SEND RESP:", r.status_code, r.text)
+    return r
 
 @app.get("/")
-async def root():
-    path = "static/index.html"
-    return FileResponse(path) if os.path.exists(path) else JSONResponse({"ok": True})
-
-@app.get("/healthz")
-async def healthz():
+def health():
     return {"ok": True}
 
-# 3) Variables de WhatsApp
-VERIFY_TOKEN = (os.getenv("WA_VERIFY_TOKEN") or os.getenv("WHATSAPP_VERIFY_TOKEN") or "").strip()
-WA_TOKEN = os.getenv("WA_ACCESS_TOKEN") or os.getenv("WHATSAPP_TOKEN")
-WA_PHONE_ID = os.getenv("WA_PHONE_NUMBER_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-WA_API_VER = os.getenv("WA_API_VERSION", "v21.0")
-
-# 4) Verificación (GET) de Meta
-@app.get("/webhook")
-async def verify_webhook(request: Request):
-    mode = request.query_params.get("hub.mode")
-    token = (request.query_params.get("hub.verify_token") or "").strip()
-    challenge = request.query_params.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
-        return PlainTextResponse(challenge)
+@app.get("/webhook", response_class=PlainTextResponse)
+async def verify(request: Request):
+    p = dict(request.query_params)
+    if p.get("hub.mode") == "subscribe" and p.get("hub.verify_token") == VERIFY_TOKEN:
+        return p.get("hub.challenge", "")
     return PlainTextResponse("forbidden", status_code=403)
 
-# 5) Helpers WhatsApp
-async def send_whatsapp_text(to_number: str, body: str) -> dict:
-    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,  # E.164, solo dígitos: 57xxxxxxxxxx
-        "type": "text",
-        "text": {"preview_url": False, "body": body[:4096]},
-    }
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        print(f"📤 WA status={r.status_code} body={r.text[:200]}")
-        return {"status": r.status_code, "text": r.text}
-
-async def wa_mark_read(message_id: str):
-    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
-    async with httpx.AsyncClient(timeout=30) as c:
-        await c.post(url, headers=headers, json=payload)
-
-async def wa_typing(to_number: str, state: str = "composing"):
-    url = f"https://graph.facebook.com/{WA_API_VER}/{WA_PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": to_number, "type": "typing", "typing": {"state": state}}
-    async with httpx.AsyncClient(timeout=30) as c:
-        await c.post(url, headers=headers, json=payload)
-
-# 6) Webhook principal (POST)
 @app.post("/webhook")
-async def webhook(req: Request):
-    raw = await req.body()
-    if not raw:
-        return {"status": "ok"}
+async def receive(request: Request):
+    body = await request.json()
+    print("WEBHOOK EVENT:", json.dumps(body, ensure_ascii=False))
 
     try:
-        body = json.loads(raw)
-    except json.JSONDecodeError:
-        print("⚠️ POST no-JSON recibido")
-        return {"status": "ok"}
+        changes = body["entry"][0]["changes"][0]["value"]
+        msgs = changes.get("messages", [])
+        if not msgs:
+            return {"status": "ok"}  # eventos de estado, etc.
 
-    print("📩 payload:", body)
+        msg = msgs[0]
+        from_waid = msg["from"]               # '57XXXXXXXXXX'
+        user_text = msg.get("text", {}).get("body", "").strip()
 
-    try:
-        for entry in body.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                for msg in value.get("messages", []):
-                    user = msg.get("from")
-                    msg_id = msg.get("id")
-                    text = (msg.get("text") or {}).get("body", "").strip()
-
-                    if user and text:
-                        if msg_id:
-                            await wa_mark_read(msg_id)
-                        await wa_typing(user, "composing")
-
-                        # --- IMPORT PEREZOSO: evita import circular ---
-                        reply = f"Recibí tu mensaje: {text}"
-                        try:
-                            rag = import_module("app.rag")       # NO importes arriba
-                            func = getattr(rag, "answer_with_rag", None)
-                            if callable(func):
-                                if inspect.iscoroutinefunction(func):
-                                    reply = await func(text)
-                                else:
-                                    reply = func(text)
-                        except Exception as e:
-                            print("❌ Error al invocar RAG:", repr(e))
-
-                        await wa_typing(user, "paused")
-                        await send_whatsapp_text(user, reply)
+        # Responder EN SEGUNDO PLANO (no bloquees el webhook)
+        asyncio.create_task(process_and_reply(from_waid, user_text))
     except Exception as e:
-        print("❌ Error en webhook:", e)
+        print("ERROR_PROCESSING_EVENT:", repr(e))
 
-    return JSONResponse({"status": "ok"})
+    # Siempre 200 rápido
+    return {"status": "ok"}
+
+async def process_and_reply(to_waid: str, user_text: str):
+    try:
+        if not user_text:
+            await send_whatsapp_text(to_waid, "¿Podrías escribir tu consulta?")
+            return
+
+        # 1) (opcional) acuse de recibo rápido
+        # await send_whatsapp_text(to_waid, "Recibí tu mensaje, estoy consultando...")
+
+        # 2) Llamar a tu RAG/IA
+        answer = await answer_with_rag(user_text)
+
+        # 3) Enviar respuesta final
+        await send_whatsapp_text(to_waid, answer or "No encontré datos para responder en este momento.")
+    except Exception as e:
+        print("ERROR_BG_TASK:", repr(e))
+        try:
+            await send_whatsapp_text(to_waid, "Hubo un error procesando tu consulta. Intenta de nuevo.")
+        except Exception as e2:
+            print("ERROR_SENDING_FAILSAFE:", repr(e2))
