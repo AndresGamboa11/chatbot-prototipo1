@@ -174,4 +174,28 @@ def chroma_env():
         "tenant": os.getenv("CHROMA_TENANT"),
         "database": os.getenv("CHROMA_DATABASE"),
     }
+    @app.get("/chroma-version")
+def chroma_version():
+    return {
+        "chromadb_version": getattr(chromadb, "__version__", "unknown"),
+        "host": os.getenv("CHROMA_SERVER_HOST"),
+        "tenant": os.getenv("CHROMA_TENANT"),
+        "database": os.getenv("CHROMA_DATABASE"),
+        "api_key_prefix": (os.getenv("CHROMA_SERVER_AUTH") or "")[:5],  # ck-...
+        "api_key_len": len(os.getenv("CHROMA_SERVER_AUTH") or ""),
+    }
+
+@app.get("/chroma-debug")
+def chroma_debug():
+    try:
+        col = get_collection()
+        client_type = str(type(col._client))
+        # intentar listar colecciones para forzar error del servidor si credencial no cuadra
+        try:
+            names = [c.name for c in col._client.list_collections()]
+        except Exception as e2:
+            names = f"list_collections_error: {repr(e2)}"
+        return {"ok": True, "client_type": client_type, "collections": names}
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
 
