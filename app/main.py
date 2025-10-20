@@ -170,3 +170,34 @@ def chroma_debug():
 async def ask(q: str):
     ans = await answer_with_rag(q)
     return {"query": q, "answer": ans}
+
+@app.get("/chroma-echo")
+def chroma_echo():
+    import os, chromadb
+    api = (os.getenv("CHROMA_SERVER_AUTH") or "")
+    ten = (os.getenv("CHROMA_TENANT") or "")
+    db  = (os.getenv("CHROMA_DATABASE") or "")
+    # info de espacios ocultos
+    def show(s):
+        return {
+            "repr": repr(s),
+            "len": len(s),
+            "endswith_space": s.endswith(" "),
+            "last_ord": ord(s[-1]) if s else None,
+        }
+    info = {
+        "api_prefix": api[:5],
+        "api_info": show(api),
+        "tenant_info": show(ten),
+        "database_info": show(db),
+    }
+    # intento directo con CloudClient “crudo”
+    try:
+        client = chromadb.CloudClient(api_key=api, tenant=ten, database=db)
+        cols = [c.name for c in client.list_collections()]
+        info["cloudclient_ok"] = True
+        info["collections"] = cols
+    except Exception as e:
+        info["cloudclient_ok"] = False
+        info["cloudclient_error"] = repr(e)
+    return info
