@@ -163,4 +163,10 @@ def chroma_debug():
             names = f"list_collections_error: {repr(e2)}"
         return {"ok": True, "client_type": client_type, "collections": names}
     except Exception as e:
-        return {"ok": False, "e
+        return {"ok": False, "error": repr(e)}
+
+# ---------- Probar RAG desde navegador ----------
+@app.get("/ask")
+async def ask(q: str):
+    ans = await answer_with_rag(q)
+    return {"query": q, "answer": ans}
