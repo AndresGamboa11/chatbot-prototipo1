@@ -1,33 +1,35 @@
-# app/chroma_client.py  (ESPAÑOL)
+# app/chroma_client.py
 """
-Cliente Chroma Cloud (modo simple para Render)
-Autor: Andrés Gamboa
-Descripción:
-Conecta a Chroma Cloud sin necesidad de tenant ni database, usando solo la API key.
+Cliente Chroma Cloud (HttpClient con headers de tenant/database opcionales).
+Si CHROMA_TENANT y/o CHROMA_DATABASE están definidos, se envían en los headers:
+- X-Chroma-Tenant
+- X-Chroma-Database
+Esto evita el uso de 'default_tenant' en cuentas que exigen multi-tenant.
 """
 
 import os
 import chromadb
 
-# --- Configuración desde variables de entorno ---
-CHROMA_HOST = os.getenv("CHROMA_SERVER_HOST", "https://api.trychroma.com")
-CHROMA_AUTH = os.getenv("CHROMA_SERVER_AUTH", "")
+CHROMA_HOST       = os.getenv("CHROMA_SERVER_HOST", "https://api.trychroma.com")
+CHROMA_AUTH       = os.getenv("CHROMA_SERVER_AUTH", "")
 CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "ccp_docs")
-
+CHROMA_TENANT     = (os.getenv("CHROMA_TENANT") or "").strip()
+CHROMA_DATABASE   = (os.getenv("CHROMA_DATABASE") or "").strip()
 
 def get_collection():
-    """
-    Devuelve la colección de Chroma configurada en la nube.
-    Si no existe, la crea automáticamente.
-    """
     if not CHROMA_AUTH:
-        raise RuntimeError("❌ Falta la variable CHROMA_SERVER_AUTH (API key de Chroma Cloud).")
+        raise RuntimeError("❌ Falta CHROMA_SERVER_AUTH (API key de Chroma Cloud).")
 
-    # Cliente HTTP (NO usar CloudClient)
+    headers = {"Authorization": f"Bearer {CHROMA_AUTH}"}
+    # Si tu cuenta requiere tenant/database, añade estos headers:
+    if CHROMA_TENANT:
+        headers["X-Chroma-Tenant"] = CHROMA_TENANT
+    if CHROMA_DATABASE:
+        headers["X-Chroma-Database"] = CHROMA_DATABASE
+
     client = chromadb.HttpClient(
         host=CHROMA_HOST,
-        headers={"Authorization": f"Bearer {CHROMA_AUTH}"}
+        headers=headers,
     )
 
-    collection = client.get_or_create_collection(name=CHROMA_COLLECTION)
-    return collection
+    return client.get_or_create_collection(name=CHROMA_COLLECTION)
