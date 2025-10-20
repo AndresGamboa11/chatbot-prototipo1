@@ -137,10 +137,22 @@ def chroma_check():
     try:
         from app.chroma_client import get_collection
         col = get_collection()
-        col.query(query_texts=["ping"], n_results=1, include=[])
-        return {"ok": True, "collection": col.name}
+
+        # Intenta contar documentos (algunas versiones tienen count())
+        try:
+            count = col.count()  # si tu versión lo soporta
+        except Exception:
+            # Fallback: intenta un peek seguro (no requiere embeddings)
+            try:
+                peek = col.peek() or {}
+                count = len(peek.get("ids", []))
+            except Exception:
+                count = None
+
+        return {"ok": True, "collection": col.name, "count": count}
     except Exception as e:
         return {"ok": False, "error": repr(e)}
+
 
 # --------------------------------------------------------------
 # PROBAR RESPUESTA RAG DESDE NAVEGADOR
@@ -151,7 +163,7 @@ async def ask(q: str):
     ans = await answer_with_rag(q)
     return {"query": q, "answer": ans}
 
-#ver envio 
+
 @app.get("/chroma-env")
 def chroma_env():
     import os
@@ -159,5 +171,7 @@ def chroma_env():
         "host": os.getenv("CHROMA_SERVER_HOST"),
         "auth_set": bool(os.getenv("CHROMA_SERVER_AUTH")),
         "collection": os.getenv("CHROMA_COLLECTION"),
+        "tenant": os.getenv("CHROMA_TENANT"),
+        "database": os.getenv("CHROMA_DATABASE"),
     }
 
