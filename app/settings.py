@@ -29,8 +29,6 @@ class Settings(BaseSettings):
     # Chroma (Cloud o local)
     chroma_server_host: str | None = None   # ej: https://api.trychroma.com
     chroma_server_auth: str | None = None   # token si aplica
-    chroma_tenant: str | None = None
-    chroma_database: str | None = None
     chroma_collection: str = "ccp_docs"
 
     class Config:
@@ -58,8 +56,6 @@ def get_settings() -> Settings:
     # Chroma (acepta CHROMA_SERVER_AUTH o CHROMA_API_KEY)
     s.chroma_server_host  = s.chroma_server_host  or _first("CHROMA_SERVER_HOST")
     s.chroma_server_auth  = s.chroma_server_auth  or _first("CHROMA_SERVER_AUTH", "CHROMA_API_KEY")
-    s.chroma_tenant       = s.chroma_tenant       or _first("CHROMA_TENANT")
-    s.chroma_database     = s.chroma_database     or _first("CHROMA_DATABASE")
     s.chroma_collection   = s.chroma_collection   or _first("CHROMA_COLLECTION") or "ccp_docs"
 
     return s
