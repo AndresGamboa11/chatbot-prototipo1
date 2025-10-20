@@ -28,9 +28,5 @@ services:
         sync: false
       - key: CHROMA_SERVER_AUTH
         sync: false
-      - key: CHROMA_TENANT
-        sync: false
-      - key: CHROMA_DATABASE
-        sync: false
       - key: CHROMA_COLLECTION
         value: ccp_docs
