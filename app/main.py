@@ -158,8 +158,6 @@ def chroma_env():
     return {
         "host": os.getenv("CHROMA_SERVER_HOST"),
         "auth_set": bool(os.getenv("CHROMA_SERVER_AUTH")),
-        "tenant": os.getenv("CHROMA_TENANT"),
-        "database": os.getenv("CHROMA_DATABASE"),
         "collection": os.getenv("CHROMA_COLLECTION"),
     }
 
