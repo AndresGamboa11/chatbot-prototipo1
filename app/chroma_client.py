@@ -1,37 +1,22 @@
 # app/chroma_client.py
-"""
-Cliente Chroma Cloud (HttpClient) con tenant/database explícitos.
-Envía tenant/database tanto como argumentos del cliente como en headers
-para cubrir cualquier versión del SDK/servidor.
-"""
-
 import os
 import chromadb
 
-CHROMA_HOST       = os.getenv("CHROMA_SERVER_HOST", "https://api.trychroma.com")
-CHROMA_AUTH       = os.getenv("CHROMA_SERVER_AUTH", "")
-CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "ccp_docs")
-CHROMA_TENANT     = (os.getenv("CHROMA_TENANT") or "").strip() or None
-CHROMA_DATABASE   = (os.getenv("CHROMA_DATABASE") or "").strip() or None
-
+API_KEY = (os.getenv("CHROMA_SERVER_AUTH") or "").strip()
+TENANT  = (os.getenv("CHROMA_TENANT") or "").strip()
+DB_NAME = (os.getenv("CHROMA_DATABASE") or "").strip()
+COLL    = (os.getenv("CHROMA_COLLECTION") or "ccp_docs").strip()
 
 def get_collection():
-    if not CHROMA_AUTH:
-        raise RuntimeError("❌ Falta CHROMA_SERVER_AUTH (API key de Chroma Cloud).")
+    if not API_KEY:
+        raise RuntimeError("Falta CHROMA_SERVER_AUTH (api_key).")
+    if not TENANT or not DB_NAME:
+        raise RuntimeError("Faltan CHROMA_TENANT y/o CHROMA_DATABASE.")
 
-    # Autorización + (opcional) nombres de tenant/database como headers
-    headers = {"Authorization": f"Bearer {CHROMA_AUTH}"}
-    if CHROMA_TENANT:
-        headers["X-Chroma-Tenant"] = CHROMA_TENANT
-    if CHROMA_DATABASE:
-        headers["X-Chroma-Database"] = CHROMA_DATABASE
-
-    # 🚧 IMPORTANTE: pasar tenant/database como argumentos del cliente
-    client = chromadb.HttpClient(
-        host=CHROMA_HOST,
-        headers=headers,
-        tenant=CHROMA_TENANT,
-        database=CHROMA_DATABASE,
+    # EXACTAMENTE como el SDK del panel:
+    client = chromadb.CloudClient(
+        api_key=API_KEY,
+        tenant=TENANT,
+        database=DB_NAME,
     )
-
-    return client.get_or_create_collection(name=CHROMA_COLLECTION)
+    return client.get_or_create_collection(name=COLL)
