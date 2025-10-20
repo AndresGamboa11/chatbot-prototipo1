@@ -150,3 +150,16 @@ async def ask(q: str):
     from app.rag import answer_with_rag
     ans = await answer_with_rag(q)
     return {"query": q, "answer": ans}
+
+#ver envio 
+@app.get("/chroma-env")
+def chroma_env():
+    import os
+    return {
+        "host": os.getenv("CHROMA_SERVER_HOST"),
+        "auth_set": bool(os.getenv("CHROMA_SERVER_AUTH")),
+        "tenant": os.getenv("CHROMA_TENANT"),
+        "database": os.getenv("CHROMA_DATABASE"),
+        "collection": os.getenv("CHROMA_COLLECTION"),
+    }
+
